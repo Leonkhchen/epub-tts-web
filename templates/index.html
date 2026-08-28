@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB 智慧有聲書轉檔服務 (Edge-TTS)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#6366f1',
+                        accent: '#8b5cf6',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="min-h-full flex flex-col antialiased selection:bg-indigo-500 selection:text-white bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950">
+
+    <!-- 頂部導航 -->
+    <header class="border-b border-slate-800/80 backdrop-blur-md bg-slate-900/60 sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="p-2.5 bg-gradient-to-tr from-indigo-600 to-violet-500 rounded-xl shadow-lg shadow-indigo-500/30">
+                    <i data-lucide="headphones" class="w-6 h-6 text-white"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-200 bg-clip-text text-transparent">
+                        EPUB 有聲書轉檔器
+                    </h1>
+                    <p class="text-xs text-slate-400">極致中英混讀・微軟神經語音・雲端極速轉換</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2">
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-2 animate-pulse"></span>
+                    Zeabur 雲端就緒
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主體內容 -->
+    <main class="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 space-y-8">
+
+        <!-- 步驟 1：上傳 EPUB 電子書 -->
+        <section class="bg-slate-800/40 border border-slate-700/60 backdrop-blur-xl rounded-2xl p-6 sm:p-8 shadow-xl">
+            <h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-4">
+                <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">1</span>
+                上傳 EPUB 電子書
+            </h2>
+
+            <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-indigo-500/80 bg-slate-900/40 hover:bg-indigo-950/20 rounded-xl p-8 text-center cursor-pointer transition-all duration-200">
+                <input type="file" id="epubInput" accept=".epub" class="hidden">
+                <div class="flex flex-col items-center justify-center space-y-3">
+                    <div class="p-4 bg-slate-800/80 rounded-full text-indigo-400 border border-slate-700">
+                        <i data-lucide="book-up" class="w-8 h-8"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-slate-200">點擊選擇檔案 或 拖放 EPUB 至此處</p>
+                        <p class="text-xs text-slate-400 mt-1">支援各類標準與現代 EPUB3 電子書（雙引擎容錯解析）</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 書籍解析摘要卡片 -->
+            <div id="bookInfo" class="hidden mt-6 bg-slate-900/70 border border-indigo-500/30 rounded-xl p-5">
+                <div class="flex items-start justify-between flex-wrap gap-4">
+                    <div class="space-y-1">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="book-open" class="w-4 h-4 text-indigo-400"></i>
+                            <h3 id="bookTitle" class="font-bold text-white text-base">書名</h3>
+                        </div>
+                        <p id="bookStats" class="text-xs text-slate-400">共 0 章・總字數：0 字</p>
+                    </div>
+                    <button id="toggleChaptersBtn" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1 border border-indigo-500/20 px-3 py-1.5 rounded-lg bg-indigo-500/10">
+                        <span>查看章節列表</span>
+                        <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <!-- 展開章節列表 -->
+                <div id="chapterListContainer" class="hidden mt-4 pt-4 border-t border-slate-800 max-h-60 overflow-y-auto space-y-1.5 pr-2">
+                    <!-- JS 動態插入章節項目 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- 步驟 2：選擇語音與調音 -->
+        <section class="bg-slate-800/40 border border-slate-700/60 backdrop-blur-xl rounded-2xl p-6 sm:p-8 shadow-xl">
+            <h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-6">
+                <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">2</span>
+                選擇語音聲線與調音參數
+            </h2>
+
+            <!-- 語者網格選擇 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 mb-6">
+                {% for voice in voices %}
+                <label class="voice-card cursor-pointer block relative rounded-xl border border-slate-700/80 bg-slate-900/60 p-4 transition-all duration-200 hover:border-indigo-500 hover:bg-slate-900/90 peer-checked:border-indigo-500 peer-checked:bg-indigo-950/40 peer-checked:ring-2 peer-checked:ring-indigo-500/50">
+                    <input type="radio" name="voice" value="{{ voice.id }}" class="sr-only peer" {% if voice.id == 'zh-CN-YunjianNeural' %}checked{% endif %}>
+                    <div class="flex items-start justify-between mb-2">
+                        <span class="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold {% if voice.gender == 'male' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-pink-500/10 text-pink-400 border border-pink-500/20{% endif %}">
+                            {{ voice.badge }}
+                        </span>
+                        <div class="w-4 h-4 rounded-full border border-slate-600 peer-checked:border-indigo-500 peer-checked:bg-indigo-500 flex items-center justify-center">
+                            <span class="w-1.5 h-1.5 rounded-full bg-white hidden peer-checked:block"></span>
+                        </div>
+                    </div>
+                    <div class="font-bold text-sm text-slate-100 mb-1">{{ voice.name }}</div>
+                    <div class="text-xs text-slate-400 line-clamp-2 leading-relaxed">{{ voice.desc }}</div>
+                </label>
+                {% endfor %}
+            </div>
+
+            <!-- 微調滑桿 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-slate-900/40 p-5 rounded-xl border border-slate-800">
+                <!-- 音調 -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-medium">
+                        <span class="text-slate-300 flex items-center gap-1.5">
+                            <i data-lucide="sliders" class="w-3.5 h-3.5 text-indigo-400"></i>
+                            音調微調 (Pitch)
+                        </span>
+                        <span id="pitchVal" class="text-indigo-400 font-mono">-4 Hz (低沉男聲)</span>
+                    </div>
+                    <input type="range" id="pitchSlider" min="-12" max="10" step="1" value="-4" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                    <div class="flex justify-between text-[10px] text-slate-500">
+                        <span>極致厚重 (-12Hz)</span>
+                        <span>原調 (0Hz)</span>
+                        <span>高音 (+10Hz)</span>
+                    </div>
+                </div>
+
+                <!-- 語速 -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-medium">
+                        <span class="text-slate-300 flex items-center gap-1.5">
+                            <i data-lucide="gauge" class="w-3.5 h-3.5 text-indigo-400"></i>
+                            語速調節 (Rate)
+                        </span>
+                        <span id="rateVal" class="text-indigo-400 font-mono">-3% (沉穩說書)</span>
+                    </div>
+                    <input type="range" id="rateSlider" min="-25" max="30" step="1" value="-3" class="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500">
+                    <div class="flex justify-between text-[10px] text-slate-500">
+                        <span>慢速 (-25%)</span>
+                        <span>標準 (0%)</span>
+                        <span>快讀 (+30%)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 開始轉檔按鈕 -->
+            <div class="mt-8 flex justify-end">
+                <button id="startBtn" disabled class="disabled:opacity-40 disabled:cursor-not-allowed px-8 py-3.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-600 hover:from-indigo-600 hover:to-purple-600 text-white font-semibold rounded-xl shadow-lg shadow-indigo-500/25 flex items-center gap-2 transition-all duration-200">
+                    <i data-lucide="play" class="w-5 h-5"></i>
+                    <span>開始生成有聲書</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- 步驟 3：即時進度與音訊播放列表 -->
+        <section id="progressSection" class="hidden bg-slate-800/40 border border-slate-700/60 backdrop-blur-xl rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
+            <div class="flex items-center justify-between flex-wrap gap-4">
+                <div class="space-y-1">
+                    <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                        <i data-lucide="loader" class="w-5 h-5 text-indigo-400 animate-spin" id="spinIcon"></i>
+                        <span id="statusHeader">轉檔進度</span>
+                    </h2>
+                    <p id="currentChapterText" class="text-xs text-indigo-300 font-mono">準備開始…</p>
+                </div>
+                <!-- 打包下載整本 ZIP -->
+                <a id="downloadZipBtn" href="#" class="hidden px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-emerald-500/25 flex items-center gap-2 transition-all">
+                    <i data-lucide="archive" class="w-4 h-4"></i>
+                    <span>一鍵下載整本 ZIP 壓縮檔</span>
+                </a>
+            </div>
+
+            <!-- 進度條 -->
+            <div class="space-y-2">
+                <div class="w-full bg-slate-900 rounded-full h-3 p-0.5 overflow-hidden border border-slate-700/80">
+                    <div id="progressBar" class="bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-400 h-full rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <div class="flex justify-between text-xs text-slate-400">
+                    <span id="progressPercent">0%</span>
+                    <span id="completedCount">0 / 0 章</span>
+                </div>
+            </div>
+
+            <!-- 已完成章節音訊播放器清單 -->
+            <div class="space-y-3 pt-4 border-t border-slate-800">
+                <h3 class="text-xs font-semibold text-slate-400 tracking-wider uppercase">已生成章節試聽與下載</h3>
+                <div id="audioList" class="space-y-2 max-h-80 overflow-y-auto pr-2">
+                    <!-- JS 動態插入各章節音訊項目 -->
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 頁腳 -->
+    <footer class="border-t border-slate-800/80 mt-auto py-6 text-center text-xs text-slate-500">
+        <p>© 2026 EPUB to Audiobook Cloud Engine • Powered by Edge-TTS & FastAPI</p>
+    </footer>
+
+    <!-- 前端互動 JS 腳本 -->
+    <script>
+        lucide.createIcons();
+
+        let currentTaskId = null;
+        let pollTimer = null;
+        let totalChapters = 0;
+
+        const dropZone = document.getElementById('dropZone');
+        const epubInput = document.getElementById('epubInput');
+        const bookInfo = document.getElementById('bookInfo');
+        const bookTitle = document.getElementById('bookTitle');
+        const bookStats = document.getElementById('bookStats');
+        const startBtn = document.getElementById('startBtn');
+        const toggleChaptersBtn = document.getElementById('toggleChaptersBtn');
+        const chapterListContainer = document.getElementById('chapterListContainer');
+
+        const pitchSlider = document.getElementById('pitchSlider');
+        const pitchVal = document.getElementById('pitchVal');
+        const rateSlider = document.getElementById('rateSlider');
+        const rateVal = document.getElementById('rateVal');
+
+        const progressSection = document.getElementById('progressSection');
+        const progressBar = document.getElementById('progressBar');
+        const progressPercent = document.getElementById('progressPercent');
+        const completedCount = document.getElementById('completedCount');
+        const currentChapterText = document.getElementById('currentChapterText');
+        const audioList = document.getElementById('audioList');
+        const downloadZipBtn = document.getElementById('downloadZipBtn');
+        const spinIcon = document.getElementById('spinIcon');
+
+        // 音調與語速滑桿即時更新
+        pitchSlider.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value);
+            pitchVal.innerText = `${v >= 0 ? '+' : ''}${v} Hz ${v < 0 ? '(低沉男聲)' : v === 0 ? '(標準)' : '(高音)'}`;
+        });
+
+        rateSlider.addEventListener('input', (e) => {
+            const v = parseInt(e.target.value);
+            rateVal.innerText = `${v >= 0 ? '+' : ''}${v}% ${v < 0 ? '(沉穩說書)' : v === 0 ? '(標準)' : '(快讀)'}`;
+        });
+
+        // 點擊觸發檔案選擇
+        dropZone.addEventListener('click', () => epubInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-indigo-500'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-indigo-500'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-indigo-500');
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        epubInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFile(e.target.files[0]);
+        });
+
+        async function handleFile(file) {
+            if (!file.name.toLowerCase().endsWith('.epub')) {
+                alert('請上傳 .epub 格式的電子書！');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            dropZone.classList.add('opacity-50', 'pointer-events-none');
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '上傳失敗');
+
+                currentTaskId = data.task_id;
+                totalChapters = data.total_chapters;
+                bookTitle.innerText = `《${data.title}》`;
+                bookStats.innerText = `共 ${data.total_chapters} 章・總字數：${data.total_chars.toLocaleString()} 字`;
+                
+                // 渲染章節清單
+                chapterListContainer.innerHTML = data.chapters.map(c => `
+                    <div class="flex items-center justify-between text-xs py-1 px-2.5 rounded bg-slate-800/60 text-slate-300">
+                        <span class="truncate max-w-xs">第 ${c.index} 章：${c.title}</span>
+                        <span class="text-slate-500 font-mono">${c.char_count.toLocaleString()} 字</span>
+                    </div>
+                `).join('');
+
+                bookInfo.classList.remove('hidden');
+                startBtn.disabled = false;
+            } catch (err) {
+                alert('解析失敗: ' + err.message);
+            } finally {
+                dropZone.classList.remove('opacity-50', 'pointer-events-none');
+                lucide.createIcons();
+            }
+        }
+
+        toggleChaptersBtn.addEventListener('click', () => {
+            chapterListContainer.classList.toggle('hidden');
+        });
+
+        // 點擊開始轉檔
+        startBtn.addEventListener('click', async () => {
+            if (!currentTaskId) return;
+
+            const voice = document.querySelector('input[name="voice"]:checked').value;
+            const pitch = `${parseInt(pitchSlider.value) >= 0 ? '+' : ''}${pitchSlider.value}Hz`;
+            const rate = `${parseInt(rateSlider.value) >= 0 ? '+' : ''}${rateSlider.value}%`;
+
+            const formData = new FormData();
+            formData.append('task_id', currentTaskId);
+            formData.append('voice', voice);
+            formData.append('pitch', pitch);
+            formData.append('rate', rate);
+
+            startBtn.disabled = true;
+            progressSection.classList.remove('hidden');
+            audioList.innerHTML = '';
+            downloadZipBtn.classList.add('hidden');
+            spinIcon.classList.add('animate-spin');
+
+            try {
+                const res = await fetch('/api/convert', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '啟動失敗');
+
+                // 啟動進度輪詢
+                pollTimer = setInterval(checkProgress, 1000);
+            } catch (err) {
+                alert('啟動轉檔錯誤: ' + err.message);
+                startBtn.disabled = false;
+            }
+        });
+
+        async function checkProgress() {
+            if (!currentTaskId) return;
+            try {
+                const res = await fetch(`/api/status/${currentTaskId}`);
+                const data = await res.json();
+                
+                progressBar.style.width = `${data.progress}%`;
+                progressPercent.innerText = `${data.progress}%`;
+                completedCount.innerText = `${data.completed_files.length} / ${totalChapters} 章`;
+                currentChapterText.innerText = data.current_chapter;
+
+                // 渲染已完成音訊
+                audioList.innerHTML = data.completed_files.map(f => `
+                    <div class="flex items-center justify-between flex-wrap gap-2 p-3 bg-slate-900/80 border border-slate-800 rounded-xl">
+                        <div class="flex items-center gap-2 text-xs text-slate-200">
+                            <span class="font-bold text-indigo-400 font-mono">[${f.index}]</span>
+                            <span class="font-medium truncate max-w-[200px] sm:max-w-xs">${f.title}</span>
+                            <span class="text-slate-500 text-[10px]">(${f.size_kb} KB)</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <audio controls class="h-8 max-w-[200px] sm:max-w-xs">
+                                <source src="${f.url}" type="audio/mpeg">
+                            </audio>
+                            <a href="${f.url}" download class="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg">
+                                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                            </a>
+                        </div>
+                    </div>
+                `).join('');
+                lucide.createIcons();
+
+                if (data.status === 'completed') {
+                    clearInterval(pollTimer);
+                    spinIcon.classList.remove('animate-spin');
+                    if (data.zip_url) {
+                        downloadZipBtn.href = data.zip_url;
+                        downloadZipBtn.classList.remove('hidden');
+                    }
+                    startBtn.disabled = false;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    </script>
+</body>
+</html>
