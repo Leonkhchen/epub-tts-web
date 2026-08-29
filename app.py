@@ -146,10 +146,12 @@ def chunk_text(text: str, max_chars: int = 500) -> list[str]:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "voices": VOICES
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"voices": VOICES}
+    )
+
 
 
 @app.get("/api/sample/{voice_id}")
@@ -397,3 +399,13 @@ async def download_zip(task_id: str):
         media_type="application/zip",
         filename=f"{task['title']}_有聲書.zip"
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("=" * 60)
+    print("🎧 EPUB 有聲書轉檔服務已在本機啟動！")
+    print("👉 請打開瀏覽器訪問: http://127.0.0.1:8080")
+    print("=" * 60)
+    uvicorn.run("app:app", host="127.0.0.1", port=8080, reload=False)
+
