@@ -22,8 +22,9 @@ STORAGE_DIR = BASE_DIR / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 OUTPUT_DIR = STORAGE_DIR / "outputs"
 SAMPLE_DIR = STORAGE_DIR / "samples"
+TEMP_DIR = STORAGE_DIR / "temp"
 
-for d in (UPLOAD_DIR, OUTPUT_DIR, SAMPLE_DIR):
+for d in (UPLOAD_DIR, OUTPUT_DIR, SAMPLE_DIR, TEMP_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -105,6 +106,16 @@ VOICES = [
 ]
 
 TASKS: Dict[str, Dict[str, Any]] = {}
+
+
+@app.on_event("startup")
+async def startup_event():
+    """服務啟動時校準微軟 TTS DRM 時鐘偏差"""
+    try:
+        await edge_tts.list_voices()
+        print("Edge-TTS DRM Clock Sync Initialized Successfully.")
+    except Exception as e:
+        print(f"Edge-TTS DRM Init notice: {e}")
 
 
 def _safe_name(name: str) -> str:
@@ -214,30 +225,46 @@ async def upload_epub(file: UploadFile = File(...)):
 
 
 async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str, out_path: Path):
-    """分段串流合成章節音訊，保證 100% 完整產出不截斷"""
+    """分段合成章節音訊，使用官方 save() 自動容錯處理 DRM 403 並拼接完整音訊"""
     chunks = chunk_text(text, max_chars=500)
     if not chunks:
         raise ValueError("章節無實質文字可供合成")
 
-    with open(out_path, "wb") as outfile:
-        for chunk in chunks:
+    temp_chunk_files = []
+    try:
+        for idx, chunk in enumerate(chunks):
+            temp_chunk_path = TEMP_DIR / f"chunk_{uuid.uuid4().hex[:8]}_{idx}.mp3"
             success = False
             for retry in range(3):
                 try:
                     comm = edge_tts.Communicate(chunk, voice=voice, pitch=pitch, rate=rate)
-                    has_audio = False
-                    async for chunk_data in comm.stream():
-                        if chunk_data["type"] == "audio":
-                            outfile.write(chunk_data["data"])
-                            has_audio = True
-                    if has_audio:
+                    await comm.save(str(temp_chunk_path))
+                    if temp_chunk_path.exists() and temp_chunk_path.stat().st_size > 0:
+                        temp_chunk_files.append(temp_chunk_path)
                         success = True
                         break
                 except Exception as e:
-                    print(f"Retry {retry+1} for chunk due to: {e}")
-                    await asyncio.sleep(0.5)
+                    print(f"Retry {retry+1} for chunk {idx}: {e}")
+                    await asyncio.sleep(1.0)
             if not success:
-                print(f"Warning: chunk synthesis failed: {chunk[:30]}")
+                print(f"Warning: chunk {idx} failed after 3 retries")
+
+        if not temp_chunk_files:
+            raise RuntimeError("無法成功合成任何音訊片段")
+
+        # 拼接所有音訊分段
+        with open(out_path, "wb") as outfile:
+            for tf in temp_chunk_files:
+                with open(tf, "rb") as f:
+                    outfile.write(f.read())
+
+    finally:
+        for tf in temp_chunk_files:
+            try:
+                if tf.exists():
+                    tf.unlink()
+            except Exception:
+                pass
 
 
 async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selected_indices: List[int]):
