@@ -3,11 +3,12 @@ import re
 import uuid
 import shutil
 import asyncio
+import traceback
 from pathlib import Path
 from typing import Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 import edge_tts
@@ -22,9 +23,8 @@ UPLOAD_DIR = STORAGE_DIR / "uploads"
 OUTPUT_DIR = STORAGE_DIR / "outputs"
 SAMPLE_DIR = STORAGE_DIR / "samples"
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
+for d in (UPLOAD_DIR, OUTPUT_DIR, SAMPLE_DIR):
+    d.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -113,15 +113,13 @@ def _safe_name(name: str) -> str:
 
 
 def chunk_text(text: str, max_chars: int = 500) -> list[str]:
-    """將長章節安全拆分成 500 字以內的分段，防止 Edge-TTS WebSocket 逾時中斷"""
-    # 先依換行分段
+    """將長章節安全拆分成 500 字以內的分段，防止 Edge-TTS WebSocket 逾時斷線"""
     paras = [p.strip() for p in re.split(r'\n+', text) if p.strip()]
     chunks = []
     for p in paras:
         if len(p) <= max_chars:
             chunks.append(p)
         else:
-            # 長段落依標點符號細切
             sents = [s for s in re.split(r'(?<=[。！？；\.\!\?;])', p) if s.strip()]
             cur = ''
             for s in sents:
@@ -131,8 +129,8 @@ def chunk_text(text: str, max_chars: int = 500) -> list[str]:
                 cur += s
             if cur:
                 chunks.append(cur)
-    # 過濾只剩標點或空白的無效片段
-    return [c for c in chunks if re.search(r'[\w\u4e00-\u9fa5]', c)]
+    res = [c for c in chunks if re.search(r'[\w\u4e00-\u9fa5]', c)]
+    return res if res else [text.strip()]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -159,6 +157,7 @@ async def get_sample_audio(voice_id: str):
             comm = edge_tts.Communicate(sample_text, voice=voice_id, pitch=pitch, rate=rate)
             await comm.save(str(sample_file))
         except Exception as e:
+            print(f"Error generating sample {voice_id}: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"生成試聽失敗: {e}")
 
     return FileResponse(path=str(sample_file), media_type="audio/mpeg", filename=f"{voice_id}.mp3")
@@ -222,7 +221,6 @@ async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str,
 
     with open(out_path, "wb") as outfile:
         for chunk in chunks:
-            # 針對單個 chunk 重試最多 3 次
             success = False
             for retry in range(3):
                 try:
@@ -236,9 +234,10 @@ async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str,
                         success = True
                         break
                 except Exception as e:
+                    print(f"Retry {retry+1} for chunk due to: {e}")
                     await asyncio.sleep(0.5)
             if not success:
-                print(f"Warning: chunk synthesis failed after 3 retries: {chunk[:30]}")
+                print(f"Warning: chunk synthesis failed: {chunk[:30]}")
 
 
 async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selected_indices: List[int]):
@@ -270,9 +269,8 @@ async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selec
         try:
             await _synthesize_chapter_safe(text, voice, pitch, rate, mp3_path)
             
-            # 驗證輸出檔案大小
-            if mp3_path.exists() and mp3_path.stat().st_size > 5120:  # 大於 5KB 算有效完成
-                kb = mp3_path.stat().st_size // 1024
+            if mp3_path.exists() and mp3_path.stat().st_size > 500:
+                kb = max(1, mp3_path.stat().st_size // 1024)
                 task["completed_files"].append({
                     "index": idx,
                     "title": ch_title,
@@ -281,9 +279,9 @@ async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selec
                     "url": f"/api/audio/{task_id}/{mp3_filename}"
                 })
             else:
-                print(f"Chapter {idx} produced insufficient audio ({mp3_path.stat().st_size if mp3_path.exists() else 0} bytes)")
+                print(f"Chapter {idx} produced zero or insufficient audio")
         except Exception as e:
-            print(f"Error converting chapter {idx}: {e}")
+            print(f"Error converting chapter {idx}: {traceback.format_exc()}")
 
         task["progress"] = int(((i + 1) / total) * 100)
 
@@ -293,7 +291,7 @@ async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selec
         shutil.make_archive(zip_base_name, "zip", root_dir=str(book_out_dir))
         task["zip_url"] = f"/api/download_zip/{task_id}"
     except Exception as e:
-        print(f"Failed to create zip: {e}")
+        print(f"Failed to create zip: {traceback.format_exc()}")
 
     task["status"] = "completed"
     task["current_chapter"] = f"🎉 全部 {len(task['completed_files'])} 章轉檔完成！"
