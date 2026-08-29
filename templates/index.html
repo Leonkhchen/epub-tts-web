@@ -20,6 +20,20 @@
     </script>
     <!-- Lucide Icons CDN -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .voice-card.selected {
+            border-color: #6366f1 !important;
+            background-color: rgba(49, 46, 129, 0.4) !important;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.6) !important;
+        }
+        .voice-card.selected .radio-circle {
+            border-color: #6366f1 !important;
+            background-color: #6366f1 !important;
+        }
+        .voice-card.selected .radio-dot {
+            display: block !important;
+        }
+    </style>
 </head>
 <body class="min-h-full flex flex-col antialiased selection:bg-indigo-500 selection:text-white bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950">
 
@@ -34,13 +48,13 @@
                     <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-slate-200 to-indigo-200 bg-clip-text text-transparent">
                         EPUB 有聲書轉檔器
                     </h1>
-                    <p class="text-xs text-slate-400">極致中英混讀・微軟神經語音・雲端極速轉換</p>
+                    <p class="text-xs text-slate-400">極致中英混讀・微軟神經語音・分段串流合成</p>
                 </div>
             </div>
             <div class="flex items-center space-x-2">
                 <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                     <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-2 animate-pulse"></span>
-                    Zeabur 雲端就緒
+                    Zeabur 雲端服務中
                 </span>
             </div>
         </div>
@@ -64,7 +78,7 @@
                     </div>
                     <div>
                         <p class="text-sm font-medium text-slate-200">點擊選擇檔案 或 拖放 EPUB 至此處</p>
-                        <p class="text-xs text-slate-400 mt-1">支援各類標準與現代 EPUB3 電子書（雙引擎容錯解析）</p>
+                        <p class="text-xs text-slate-400 mt-1">支援現代 EPUB3、雙引擎自動容錯解析與章節切分</p>
                     </div>
                 </div>
             </div>
@@ -93,27 +107,47 @@
 
         <!-- 步驟 2：選擇語音與調音 -->
         <section class="bg-slate-800/40 border border-slate-700/60 backdrop-blur-xl rounded-2xl p-6 sm:p-8 shadow-xl">
-            <h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-6">
-                <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">2</span>
-                選擇語音聲線與調音參數
-            </h2>
+            <div class="flex items-center justify-between flex-wrap gap-2 mb-6">
+                <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                    <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">2</span>
+                    選擇語音聲線與調音參數
+                </h2>
+                <div class="text-xs text-indigo-300 flex items-center gap-1">
+                    <i data-lucide="check-circle" class="w-4 h-4 text-indigo-400"></i>
+                    <span>當前已選：<strong id="selectedVoiceLabel" class="text-white font-semibold">雲健（低沉說書大叔）</strong></span>
+                </div>
+            </div>
 
             <!-- 語者網格選擇 -->
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 mb-6" id="voiceGrid">
                 {% for voice in voices %}
-                <label class="voice-card cursor-pointer block relative rounded-xl border border-slate-700/80 bg-slate-900/60 p-4 transition-all duration-200 hover:border-indigo-500 hover:bg-slate-900/90 peer-checked:border-indigo-500 peer-checked:bg-indigo-950/40 peer-checked:ring-2 peer-checked:ring-indigo-500/50">
-                    <input type="radio" name="voice" value="{{ voice.id }}" class="sr-only peer" {% if voice.id == 'zh-CN-YunjianNeural' %}checked{% endif %}>
+                <div class="voice-card cursor-pointer relative rounded-xl border border-slate-700/80 bg-slate-900/60 p-4 transition-all duration-200 hover:border-indigo-500 hover:bg-slate-900/90 {% if voice.id == 'zh-CN-YunjianNeural' %}selected{% endif %}"
+                     data-voice-id="{{ voice.id }}"
+                     data-voice-name="{{ voice.name }}">
+                    
+                    <input type="radio" name="voiceRadio" value="{{ voice.id }}" class="sr-only" {% if voice.id == 'zh-CN-YunjianNeural' %}checked{% endif %}>
+                    
                     <div class="flex items-start justify-between mb-2">
                         <span class="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold {% if voice.gender == 'male' %}bg-blue-500/10 text-blue-400 border border-blue-500/20{% else %}bg-pink-500/10 text-pink-400 border border-pink-500/20{% endif %}">
                             {{ voice.badge }}
                         </span>
-                        <div class="w-4 h-4 rounded-full border border-slate-600 peer-checked:border-indigo-500 peer-checked:bg-indigo-500 flex items-center justify-center">
-                            <span class="w-1.5 h-1.5 rounded-full bg-white hidden peer-checked:block"></span>
+                        
+                        <div class="flex items-center gap-2">
+                            <!-- 試聽按鈕 -->
+                            <button type="button" class="preview-btn text-[11px] px-2 py-0.5 rounded bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white flex items-center gap-1 border border-slate-700 transition" data-voice="{{ voice.id }}" onclick="event.stopPropagation(); playPreview('{{ voice.id }}', this)">
+                                <i data-lucide="volume-2" class="w-3 h-3"></i>
+                                <span>試聽</span>
+                            </button>
+                            <!-- 單選圓圈 -->
+                            <div class="radio-circle w-4 h-4 rounded-full border border-slate-600 flex items-center justify-center transition">
+                                <span class="radio-dot w-1.5 h-1.5 rounded-full bg-white hidden"></span>
+                            </div>
                         </div>
                     </div>
+                    
                     <div class="font-bold text-sm text-slate-100 mb-1">{{ voice.name }}</div>
                     <div class="text-xs text-slate-400 line-clamp-2 leading-relaxed">{{ voice.desc }}</div>
-                </label>
+                </div>
                 {% endfor %}
             </div>
 
@@ -202,6 +236,9 @@
 
     </main>
 
+    <!-- 全域試聽 Audio 元件 -->
+    <audio id="previewAudioPlayer" class="hidden"></audio>
+
     <!-- 頁腳 -->
     <footer class="border-t border-slate-800/80 mt-auto py-6 text-center text-xs text-slate-500">
         <p>© 2026 EPUB to Audiobook Cloud Engine • Powered by Edge-TTS & FastAPI</p>
@@ -214,6 +251,7 @@
         let currentTaskId = null;
         let pollTimer = null;
         let totalChapters = 0;
+        let selectedVoiceId = 'zh-CN-YunjianNeural';
 
         const dropZone = document.getElementById('dropZone');
         const epubInput = document.getElementById('epubInput');
@@ -223,6 +261,7 @@
         const startBtn = document.getElementById('startBtn');
         const toggleChaptersBtn = document.getElementById('toggleChaptersBtn');
         const chapterListContainer = document.getElementById('chapterListContainer');
+        const selectedVoiceLabel = document.getElementById('selectedVoiceLabel');
 
         const pitchSlider = document.getElementById('pitchSlider');
         const pitchVal = document.getElementById('pitchVal');
@@ -237,6 +276,34 @@
         const audioList = document.getElementById('audioList');
         const downloadZipBtn = document.getElementById('downloadZipBtn');
         const spinIcon = document.getElementById('spinIcon');
+        const previewAudioPlayer = document.getElementById('previewAudioPlayer');
+
+        // 語音卡片點擊切換邏輯（保證 100% 反應）
+        const voiceCards = document.querySelectorAll('.voice-card');
+        voiceCards.forEach(card => {
+            card.addEventListener('click', () => {
+                voiceCards.forEach(c => {
+                    c.classList.remove('selected');
+                    const r = c.querySelector('input[name="voiceRadio"]');
+                    if (r) r.checked = false;
+                });
+                card.classList.add('selected');
+                const radio = card.querySelector('input[name="voiceRadio"]');
+                if (radio) radio.checked = true;
+                selectedVoiceId = card.getAttribute('data-voice-id');
+                selectedVoiceLabel.innerText = card.getAttribute('data-voice-name');
+            });
+        });
+
+        // 試聽樣品語音
+        function playPreview(voiceId, btn) {
+            btn.classList.add('bg-indigo-600', 'text-white');
+            previewAudioPlayer.src = `/api/sample/${voiceId}`;
+            previewAudioPlayer.play().catch(e => console.log('Audio play error:', e));
+            previewAudioPlayer.onended = () => {
+                btn.classList.remove('bg-indigo-600', 'text-white');
+            };
+        }
 
         // 音調與語速滑桿即時更新
         pitchSlider.addEventListener('input', (e) => {
@@ -249,16 +316,14 @@
             rateVal.innerText = `${v >= 0 ? '+' : ''}${v}% ${v < 0 ? '(沉穩說書)' : v === 0 ? '(標準)' : '(快讀)'}`;
         });
 
-        // 點擊觸發檔案選擇
+        // 拖放與點擊選擇檔案
         dropZone.addEventListener('click', () => epubInput.click());
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-indigo-500'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-indigo-500'));
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
             dropZone.classList.remove('border-indigo-500');
-            if (e.dataTransfer.files.length > 0) {
-                handleFile(e.dataTransfer.files[0]);
-            }
+            if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
         });
 
         epubInput.addEventListener('change', (e) => {
@@ -311,13 +376,12 @@
         startBtn.addEventListener('click', async () => {
             if (!currentTaskId) return;
 
-            const voice = document.querySelector('input[name="voice"]:checked').value;
             const pitch = `${parseInt(pitchSlider.value) >= 0 ? '+' : ''}${pitchSlider.value}Hz`;
             const rate = `${parseInt(rateSlider.value) >= 0 ? '+' : ''}${rateSlider.value}%`;
 
             const formData = new FormData();
             formData.append('task_id', currentTaskId);
-            formData.append('voice', voice);
+            formData.append('voice', selectedVoiceId);
             formData.append('pitch', pitch);
             formData.append('rate', rate);
 

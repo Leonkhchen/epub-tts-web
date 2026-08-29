@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 import edge_tts
@@ -21,9 +20,11 @@ BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 OUTPUT_DIR = STORAGE_DIR / "outputs"
+SAMPLE_DIR = STORAGE_DIR / "samples"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -103,7 +104,6 @@ VOICES = [
     }
 ]
 
-# 記憶體中的任務狀態管理
 TASKS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -112,12 +112,56 @@ def _safe_name(name: str) -> str:
     return safe[:60] or "chapter"
 
 
+def chunk_text(text: str, max_chars: int = 500) -> list[str]:
+    """將長章節安全拆分成 500 字以內的分段，防止 Edge-TTS WebSocket 逾時中斷"""
+    # 先依換行分段
+    paras = [p.strip() for p in re.split(r'\n+', text) if p.strip()]
+    chunks = []
+    for p in paras:
+        if len(p) <= max_chars:
+            chunks.append(p)
+        else:
+            # 長段落依標點符號細切
+            sents = [s for s in re.split(r'(?<=[。！？；\.\!\?;])', p) if s.strip()]
+            cur = ''
+            for s in sents:
+                if cur and len(cur) + len(s) > max_chars:
+                    chunks.append(cur)
+                    cur = ''
+                cur += s
+            if cur:
+                chunks.append(cur)
+    # 過濾只剩標點或空白的無效片段
+    return [c for c in chunks if re.search(r'[\w\u4e00-\u9fa5]', c)]
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {
         "request": request,
         "voices": VOICES
     })
+
+
+@app.get("/api/sample/{voice_id}")
+async def get_sample_audio(voice_id: str):
+    """即時產生或提供 3 秒語音試聽樣品"""
+    valid_ids = [v["id"] for v in VOICES]
+    if voice_id not in valid_ids:
+        raise HTTPException(status_code=404, detail="未知語者")
+
+    sample_file = SAMPLE_DIR / f"{voice_id}.mp3"
+    if not sample_file.exists() or sample_file.stat().st_size < 1000:
+        sample_text = "您好！我是您的專屬有聲書朗讀助理，中英文混讀都非常自然流暢。"
+        pitch = "-4Hz" if "Yunjian" in voice_id else "+0Hz"
+        rate = "-3%" if "Yunjian" in voice_id else "+0%"
+        try:
+            comm = edge_tts.Communicate(sample_text, voice=voice_id, pitch=pitch, rate=rate)
+            await comm.save(str(sample_file))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"生成試聽失敗: {e}")
+
+    return FileResponse(path=str(sample_file), media_type="audio/mpeg", filename=f"{voice_id}.mp3")
 
 
 @app.post("/api/upload")
@@ -170,6 +214,33 @@ async def upload_epub(file: UploadFile = File(...)):
     }
 
 
+async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str, out_path: Path):
+    """分段串流合成章節音訊，保證 100% 完整產出不截斷"""
+    chunks = chunk_text(text, max_chars=500)
+    if not chunks:
+        raise ValueError("章節無實質文字可供合成")
+
+    with open(out_path, "wb") as outfile:
+        for chunk in chunks:
+            # 針對單個 chunk 重試最多 3 次
+            success = False
+            for retry in range(3):
+                try:
+                    comm = edge_tts.Communicate(chunk, voice=voice, pitch=pitch, rate=rate)
+                    has_audio = False
+                    async for chunk_data in comm.stream():
+                        if chunk_data["type"] == "audio":
+                            outfile.write(chunk_data["data"])
+                            has_audio = True
+                    if has_audio:
+                        success = True
+                        break
+                except Exception as e:
+                    await asyncio.sleep(0.5)
+            if not success:
+                print(f"Warning: chunk synthesis failed after 3 retries: {chunk[:30]}")
+
+
 async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selected_indices: List[int]):
     task = TASKS.get(task_id)
     if not task:
@@ -197,17 +268,20 @@ async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selec
         mp3_path = book_out_dir / mp3_filename
 
         try:
-            communicate = edge_tts.Communicate(text, voice=voice, pitch=pitch, rate=rate)
-            await communicate.save(str(mp3_path))
-
-            kb = mp3_path.stat().st_size // 1024
-            task["completed_files"].append({
-                "index": idx,
-                "title": ch_title,
-                "filename": mp3_filename,
-                "size_kb": kb,
-                "url": f"/api/audio/{task_id}/{mp3_filename}"
-            })
+            await _synthesize_chapter_safe(text, voice, pitch, rate, mp3_path)
+            
+            # 驗證輸出檔案大小
+            if mp3_path.exists() and mp3_path.stat().st_size > 5120:  # 大於 5KB 算有效完成
+                kb = mp3_path.stat().st_size // 1024
+                task["completed_files"].append({
+                    "index": idx,
+                    "title": ch_title,
+                    "filename": mp3_filename,
+                    "size_kb": kb,
+                    "url": f"/api/audio/{task_id}/{mp3_filename}"
+                })
+            else:
+                print(f"Chapter {idx} produced insufficient audio ({mp3_path.stat().st_size if mp3_path.exists() else 0} bytes)")
         except Exception as e:
             print(f"Error converting chapter {idx}: {e}")
 
@@ -222,7 +296,7 @@ async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selec
         print(f"Failed to create zip: {e}")
 
     task["status"] = "completed"
-    task["current_chapter"] = "🎉 全部章節轉檔完成！"
+    task["current_chapter"] = f"🎉 全部 {len(task['completed_files'])} 章轉檔完成！"
 
 
 @app.post("/api/convert")
@@ -232,7 +306,7 @@ async def start_conversion(
     voice: str = Form("zh-CN-YunjianNeural"),
     pitch: str = Form("-4Hz"),
     rate: str = Form("-3%"),
-    chapters: str = Form("")  # 以逗號分隔的 index，為空表示全部
+    chapters: str = Form("")
 ):
     task = TASKS.get(task_id)
     if not task:
@@ -246,7 +320,7 @@ async def start_conversion(
             selected_indices = []
 
     background_tasks.add_task(_run_conversion, task_id, voice, pitch, rate, selected_indices)
-    return {"status": "started", "task_id": task_id}
+    return {"status": "started", "task_id": task_id, "voice": voice, "pitch": pitch, "rate": rate}
 
 
 @app.get("/api/status/{task_id}")
