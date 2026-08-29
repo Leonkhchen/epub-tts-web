@@ -3,7 +3,6 @@ import re
 import uuid
 import shutil
 import asyncio
-import socket
 import traceback
 from pathlib import Path
 from typing import Dict, Any, List
@@ -12,7 +11,6 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTa
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
-import aiohttp
 import edge_tts
 
 from converter import extract_chapters
@@ -110,16 +108,11 @@ VOICES = [
 TASKS: Dict[str, Dict[str, Any]] = {}
 
 
-def _create_connector() -> aiohttp.TCPConnector:
-    """強制使用 IPv4 連線，避免雲端容器 IPv6 路由遭微軟 Edge CDN 403 阻擋"""
-    return aiohttp.TCPConnector(family=socket.AF_INET)
-
-
 @app.on_event("startup")
 async def startup_event():
     """服務啟動時校準微軟 TTS DRM 時鐘偏差"""
     try:
-        await edge_tts.list_voices(connector=_create_connector())
+        await edge_tts.list_voices()
         print("Edge-TTS DRM Clock Sync Initialized Successfully.")
     except Exception as e:
         print(f"Edge-TTS DRM Init notice: {e}")
@@ -172,7 +165,7 @@ async def get_sample_audio(voice_id: str):
         pitch = "-4Hz" if "Yunjian" in voice_id else "+0Hz"
         rate = "-3%" if "Yunjian" in voice_id else "+0%"
         try:
-            comm = edge_tts.Communicate(sample_text, voice=voice_id, pitch=pitch, rate=rate, connector=_create_connector())
+            comm = edge_tts.Communicate(sample_text, voice=voice_id, pitch=pitch, rate=rate)
             await comm.save(str(sample_file))
         except Exception as e:
             print(f"Error generating sample {voice_id}: {traceback.format_exc()}")
@@ -232,7 +225,7 @@ async def upload_epub(file: UploadFile = File(...)):
 
 
 async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str, out_path: Path):
-    """分段合成章節音訊，使用官方 save() + IPv4 強制連線自動容錯處理 DRM 403 並拼接完整音訊"""
+    """分段合成章節音訊，使用官方 save() 自動容錯處理 DRM 403 並拼接完整音訊"""
     chunks = chunk_text(text, max_chars=500)
     if not chunks:
         raise ValueError("章節無實質文字可供合成")
@@ -244,7 +237,7 @@ async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str,
             success = False
             for retry in range(3):
                 try:
-                    comm = edge_tts.Communicate(chunk, voice=voice, pitch=pitch, rate=rate, connector=_create_connector())
+                    comm = edge_tts.Communicate(chunk, voice=voice, pitch=pitch, rate=rate)
                     await comm.save(str(temp_chunk_path))
                     if temp_chunk_path.exists() and temp_chunk_path.stat().st_size > 0:
                         temp_chunk_files.append(temp_chunk_path)
