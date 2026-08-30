@@ -3,9 +3,10 @@ import re
 import uuid
 import shutil
 import asyncio
+import logging
 import traceback
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -14,8 +15,13 @@ from starlette.requests import Request
 import edge_tts
 
 from converter import extract_chapters
+from kaggle_client import KaggleBridge
+from scheduler import TaskManager, PollingScheduler
 
-app = FastAPI(title="EPUB to Audiobook Web Service")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("app")
+
+app = FastAPI(title="EPUB to Audiobook Web Service (Zeabur & Kaggle GPU)")
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -29,383 +35,286 @@ for d in (UPLOAD_DIR, OUTPUT_DIR, SAMPLE_DIR, TEMP_DIR):
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-# 支援的精選聲線清單
+# 初始化模組
+kaggle_bridge = KaggleBridge()
+task_manager = TaskManager(STORAGE_DIR)
+scheduler = PollingScheduler(task_manager, kaggle_bridge)
+
+@app.on_event("startup")
+def on_startup():
+    scheduler.start()
+
+@app.on_event("shutdown")
+def on_shutdown():
+    scheduler.shutdown()
+
+# 支援的聲線清單
 VOICES = [
+    {
+        "id": "melo_deep_male",
+        "name": "MeloTTS 磁性說書人（⚡ Kaggle GPU 混合硬體加速）",
+        "engine": "kaggle_gpu",
+        "category": "深度學習男聲",
+        "badge": "⚡ Kaggle GPU 極速",
+        "desc": "採用 MeloTTS 神經網路 + C++ Torchaudio 磁性調音，全書 3~5 分鐘極速生成。"
+    },
     {
         "id": "zh-CN-YunjianNeural",
         "name": "雲健（磁性說書大叔・低沉男聲）",
-        "category": "男聲",
-        "gender": "male",
+        "engine": "edge_tts",
+        "category": "Edge-TTS 男聲",
         "badge": "👑 小說歷史首選",
-        "desc": "沉穩、厚重、帶有說書人磁性魅力，最適合小說、故事與長篇讀物。"
+        "desc": "沉穩、厚重、帶有說書人磁性魅力，最適合長篇小說與歷史故事。"
     },
     {
         "id": "zh-CN-YunxiNeural",
         "name": "雲希（陽光青年男聲）",
-        "category": "男聲",
-        "gender": "male",
+        "engine": "edge_tts",
+        "category": "Edge-TTS 男聲",
         "badge": "熱門影視解說",
         "desc": "清新自然、咬字清晰，廣泛用於知識科普與影視解說。"
     },
     {
         "id": "zh-TW-YunJheNeural",
         "name": "雲哲（台灣標準自然男聲）",
-        "category": "男聲",
-        "gender": "male",
+        "engine": "edge_tts",
+        "category": "Edge-TTS 男聲",
         "badge": "🇹🇼 台灣口音",
         "desc": "標準台灣日常語調，溫和自然、親切流暢。"
     },
     {
-        "id": "zh-CN-YunyangNeural",
-        "name": "雲揚（專業播音新聞男聲）",
-        "category": "男聲",
-        "gender": "male",
-        "badge": "專業播音",
-        "desc": "字正腔圓、莊重沉穩，適合商業、科技與新聞類書籍。"
-    },
-    {
         "id": "zh-CN-XiaoxiaoNeural",
-        "name": "曉曉（溫暖知性女聲）",
-        "category": "女聲",
-        "gender": "female",
-        "badge": "👑 女聲天花板",
-        "desc": "溫暖知性、富有情感起伏，各類文學作品與情感讀物首選。"
-    },
-    {
-        "id": "zh-TW-HsiaoChenNeural",
-        "name": "曉臻（台灣溫柔甜美女聲）",
-        "category": "女聲",
-        "gender": "female",
-        "badge": "🇹🇼 台灣口音",
-        "desc": "甜美親切、輕快自然，聽感舒適不疲勞。"
-    },
-    {
-        "id": "zh-TW-HsiaoYuNeural",
-        "name": "曉雨（台灣知性成熟女聲）",
-        "category": "女聲",
-        "gender": "female",
-        "badge": "🇹🇼 台灣口音",
-        "desc": "舒緩溫柔、成熟知性，適合心靈、哲學與慢讀類書籍。"
-    },
-    {
-        "id": "zh-HK-WanLungNeural",
-        "name": "雲龍（香港粵語成熟男聲）",
-        "category": "粵語",
-        "gender": "male",
-        "badge": "🇭🇰 粵語男聲",
-        "desc": "成熟穩重的標準廣東話男聲。"
-    },
-    {
-        "id": "zh-HK-HiuMaanNeural",
-        "name": "曉曼（香港粵語自然女聲）",
-        "category": "粵語",
-        "gender": "female",
-        "badge": "🇭🇰 粵語女聲",
-        "desc": "標準廣東話流利自然女聲。"
+        "name": "曉曉（知性知心女聲）",
+        "engine": "edge_tts",
+        "category": "Edge-TTS 女聲",
+        "badge": "情感散文首選",
+        "desc": "溫暖細膩、富含情感，適合散文、心靈勵志與感性故事。"
     }
 ]
 
-TASKS: Dict[str, Dict[str, Any]] = {}
-
-
-@app.on_event("startup")
-async def startup_event():
-    """服務啟動時校準微軟 TTS DRM 時鐘偏差"""
-    try:
-        await edge_tts.list_voices()
-        print("Edge-TTS DRM Clock Sync Initialized Successfully.")
-    except Exception as e:
-        print(f"Edge-TTS DRM Init notice: {e}")
-
-
-def _safe_name(name: str) -> str:
-    safe = re.sub(r'[\\/*?:"<>|]', '_', name).strip()
-    return safe[:60] or "chapter"
-
-
-def chunk_text(text: str, max_chars: int = 500) -> list[str]:
-    """將長章節安全拆分成 500 字以內的分段，防止 Edge-TTS WebSocket 逾時斷線"""
-    paras = [p.strip() for p in re.split(r'\n+', text) if p.strip()]
-    chunks = []
-    for p in paras:
-        if len(p) <= max_chars:
-            chunks.append(p)
-        else:
-            sents = [s for s in re.split(r'(?<=[。！？；\.\!\?;])', p) if s.strip()]
-            cur = ''
-            for s in sents:
-                if cur and len(cur) + len(s) > max_chars:
-                    chunks.append(cur)
-                    cur = ''
-                cur += s
-            if cur:
-                chunks.append(cur)
-    res = [c for c in chunks if re.search(r'[\w\u4e00-\u9fa5]', c)]
-    return res if res else [text.strip()]
-
-
+# ==========================================
+# 網頁路由 (Web Pages)
+# ==========================================
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index_page(request: Request):
+    """首頁：EPUB 上傳與轉檔設定"""
+    kaggle_ready = kaggle_bridge.is_configured()
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"voices": VOICES}
+        context={
+            "voices": VOICES,
+            "kaggle_ready": kaggle_ready,
+            "kaggle_user": kaggle_bridge.username or "未設定"
+        }
     )
 
+@app.get("/tasks", response_class=HTMLResponse)
+async def tasks_page(request: Request):
+    """任務狀態查詢與進度看板面板"""
+    tasks = task_manager.list_tasks()
+    return templates.TemplateResponse(
+        request=request,
+        name="tasks.html",
+        context={
+            "tasks": tasks,
+            "kaggle_ready": kaggle_bridge.is_configured()
+        }
+    )
 
-
-@app.get("/api/sample/{voice_id}")
-async def get_sample_audio(voice_id: str):
-    """即時產生或提供 3 秒語音試聽樣品"""
-    valid_ids = [v["id"] for v in VOICES]
-    if voice_id not in valid_ids:
-        raise HTTPException(status_code=404, detail="未知語者")
-
-    sample_file = SAMPLE_DIR / f"{voice_id}.mp3"
-    if not sample_file.exists() or sample_file.stat().st_size < 1000:
-        sample_text = "您好！我是您的專屬有聲書朗讀助理，中英文混讀都非常自然流暢。"
-        pitch = "-4Hz" if "Yunjian" in voice_id else "+0Hz"
-        rate = "-3%" if "Yunjian" in voice_id else "+0%"
-        try:
-            comm = edge_tts.Communicate(sample_text, voice=voice_id, pitch=pitch, rate=rate)
-            await comm.save(str(sample_file))
-        except Exception as e:
-            print(f"Error generating sample {voice_id}: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"生成試聽失敗: {e}")
-
-    return FileResponse(path=str(sample_file), media_type="audio/mpeg", filename=f"{voice_id}.mp3")
-
-
-@app.post("/api/upload")
-async def upload_epub(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".epub"):
-        raise HTTPException(status_code=400, detail="請上傳 .epub 格式的電子書！")
-
-    task_id = str(uuid.uuid4())[:8]
-    save_path = UPLOAD_DIR / f"{task_id}_{file.filename}"
-
-    with open(save_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    try:
-        title, chapters = extract_chapters(save_path)
-    except Exception as e:
-        if save_path.exists():
-            save_path.unlink()
-        raise HTTPException(status_code=500, detail=f"EPUB 解析失敗: {str(e)}")
-
-    if not chapters:
-        if save_path.exists():
-            save_path.unlink()
-        raise HTTPException(status_code=400, detail="這本 EPUB 內沒有偵測到任何章節文字內容！")
-
-    total_chars = sum(c["char_count"] for c in chapters)
-
-    TASKS[task_id] = {
-        "task_id": task_id,
-        "title": title,
-        "filename": file.filename,
-        "epub_path": str(save_path),
-        "chapters": chapters,
-        "total_chapters": len(chapters),
-        "total_chars": total_chars,
-        "status": "ready",
-        "progress": 0,
-        "current_chapter": "",
-        "completed_files": [],
-        "zip_url": None,
-        "error": None
-    }
-
-    return {
-        "task_id": task_id,
-        "title": title,
-        "total_chapters": len(chapters),
-        "total_chars": total_chars,
-        "chapters": [{"index": c["index"], "title": c["title"], "char_count": c["char_count"]} for c in chapters]
-    }
-
-
-async def _synthesize_chapter_safe(text: str, voice: str, pitch: str, rate: str, out_path: Path):
-    """分段合成章節音訊，使用官方 save() 自動容錯處理 DRM 403 並拼接完整音訊"""
-    chunks = chunk_text(text, max_chars=500)
-    if not chunks:
-        raise ValueError("章節無實質文字可供合成")
-
-    temp_chunk_files = []
-    try:
-        for idx, chunk in enumerate(chunks):
-            temp_chunk_path = TEMP_DIR / f"chunk_{uuid.uuid4().hex[:8]}_{idx}.mp3"
-            success = False
-            for retry in range(3):
-                try:
-                    comm = edge_tts.Communicate(chunk, voice=voice, pitch=pitch, rate=rate)
-                    await comm.save(str(temp_chunk_path))
-                    if temp_chunk_path.exists() and temp_chunk_path.stat().st_size > 0:
-                        temp_chunk_files.append(temp_chunk_path)
-                        success = True
-                        break
-                except Exception as e:
-                    print(f"Retry {retry+1} for chunk {idx}: {e}")
-                    await asyncio.sleep(1.0)
-            if not success:
-                print(f"Warning: chunk {idx} failed after 3 retries")
-
-        if not temp_chunk_files:
-            raise RuntimeError("無法成功合成任何音訊片段")
-
-        # 拼接所有音訊分段
-        with open(out_path, "wb") as outfile:
-            for tf in temp_chunk_files:
-                with open(tf, "rb") as f:
-                    outfile.write(f.read())
-
-    finally:
-        for tf in temp_chunk_files:
-            try:
-                if tf.exists():
-                    tf.unlink()
-            except Exception:
-                pass
-
-
-async def _run_conversion(task_id: str, voice: str, pitch: str, rate: str, selected_indices: List[int]):
-    task = TASKS.get(task_id)
-    if not task:
-        return
-
-    task["status"] = "processing"
-    task["progress"] = 0
-    task["completed_files"] = []
-
-    book_title = task["title"]
-    book_out_dir = OUTPUT_DIR / f"{task_id}_{_safe_name(book_title)}"
-    book_out_dir.mkdir(parents=True, exist_ok=True)
-
-    chapters = task["chapters"]
-    target_chapters = [c for c in chapters if c["index"] in selected_indices] if selected_indices else chapters
-    total = len(target_chapters)
-
-    for i, ch in enumerate(target_chapters):
-        idx = ch["index"]
-        ch_title = ch["title"]
-        text = ch["text"]
-        
-        task["current_chapter"] = f"正在轉檔第 {idx} 章：{ch_title}（{len(text):,} 字）"
-        mp3_filename = f"{idx:02d}_{_safe_name(ch_title)}.mp3"
-        mp3_path = book_out_dir / mp3_filename
-
-        try:
-            await _synthesize_chapter_safe(text, voice, pitch, rate, mp3_path)
-            
-            if mp3_path.exists() and mp3_path.stat().st_size > 500:
-                kb = max(1, mp3_path.stat().st_size // 1024)
-                task["completed_files"].append({
-                    "index": idx,
-                    "title": ch_title,
-                    "filename": mp3_filename,
-                    "size_kb": kb,
-                    "url": f"/api/audio/{task_id}/{mp3_filename}"
-                })
-            else:
-                print(f"Chapter {idx} produced zero or insufficient audio")
-        except Exception as e:
-            print(f"Error converting chapter {idx}: {traceback.format_exc()}")
-
-        task["progress"] = int(((i + 1) / total) * 100)
-
-    # 製作 ZIP 下載檔
-    try:
-        zip_base_name = str(OUTPUT_DIR / f"{task_id}_{_safe_name(book_title)}")
-        shutil.make_archive(zip_base_name, "zip", root_dir=str(book_out_dir))
-        task["zip_url"] = f"/api/download_zip/{task_id}"
-    except Exception as e:
-        print(f"Failed to create zip: {traceback.format_exc()}")
-
-    task["status"] = "completed"
-    task["current_chapter"] = f"🎉 全部 {len(task['completed_files'])} 章轉檔完成！"
-
-
-@app.post("/api/convert")
-async def start_conversion(
+# ==========================================
+# API 端點 (REST Endpoints)
+# ==========================================
+@app.post("/api/tasks/submit")
+async def submit_task(
     background_tasks: BackgroundTasks,
-    task_id: str = Form(...),
-    voice: str = Form("zh-CN-YunjianNeural"),
-    pitch: str = Form("-4Hz"),
-    rate: str = Form("-3%"),
-    chapters: str = Form("")
+    file: UploadFile = File(...),
+    voice_id: str = Form("melo_deep_male"),
+    rate: str = Form("+0%"),
+    volume: str = Form("+0%")
 ):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="找不到指定的轉檔任務")
+    """上傳 EPUB 並建立轉檔任務"""
+    if not file.filename.lower().endswith(".epub"):
+        raise HTTPException(status_code=400, detail="請上傳標準 .epub 格式電子書檔案")
 
-    selected_indices = []
-    if chapters.strip():
-        try:
-            selected_indices = [int(x.strip()) for x in chapters.split(",") if x.strip()]
-        except ValueError:
-            selected_indices = []
+    task_id = uuid.uuid4().hex[:8]
+    safe_filename = re.sub(r'[\\/*?:"<>|]', "_", file.filename)
+    epub_path = UPLOAD_DIR / f"{task_id}_{safe_filename}"
 
-    background_tasks.add_task(_run_conversion, task_id, voice, pitch, rate, selected_indices)
-    return {"status": "started", "task_id": task_id, "voice": voice, "pitch": pitch, "rate": rate}
+    with open(epub_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
 
+    # 解析章節與書名
+    try:
+        book_title, chapters = extract_chapters(epub_path)
+    except Exception as e:
+        book_title = Path(safe_filename).stem
+        chapters = []
 
-@app.get("/api/status/{task_id}")
-async def get_task_status(task_id: str):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="找不到任務")
-    return {
-        "status": task["status"],
-        "progress": task["progress"],
-        "current_chapter": task["current_chapter"],
-        "completed_files": task["completed_files"],
-        "zip_url": task["zip_url"],
-        "error": task["error"]
-    }
+    selected_voice = next((v for v in VOICES if v["id"] == voice_id), VOICES[0])
+    engine = selected_voice.get("engine", "edge_tts")
 
-
-@app.get("/api/audio/{task_id}/{filename}")
-async def stream_audio(task_id: str, filename: str):
-    task = TASKS.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任務不存在")
-
-    book_out_dir = OUTPUT_DIR / f"{task_id}_{_safe_name(task['title'])}"
-    file_path = book_out_dir / filename
-
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="音訊檔案不存在")
-
-    return FileResponse(
-        path=str(file_path),
-        media_type="audio/mpeg",
-        filename=filename
+    # 建立任務記錄
+    task = task_manager.create_task(
+        task_id=task_id,
+        book_title=book_title,
+        engine=engine,
+        total_chapters=len(chapters)
     )
 
+    # 派發至背景執行工作
+    if engine == "kaggle_gpu":
+        if not kaggle_bridge.is_configured():
+            task_manager.update_task(
+                task_id,
+                status="FAILED",
+                progress_message="Zeabur 環境變數未配置 KAGGLE_USERNAME / KAGGLE_KEY，無法呼叫 Kaggle GPU 服務。"
+            )
+            return JSONResponse({"status": "error", "message": "Kaggle API 尚未設定", "task_id": task_id})
+        background_tasks.add_task(_process_kaggle_submission, task_id, epub_path, book_title)
+    else:
+        # 本地 Edge-TTS 輕量轉檔
+        background_tasks.add_task(_process_edge_tts_conversion, task_id, epub_path, book_title, chapters, voice_id, rate, volume)
 
-@app.get("/api/download_zip/{task_id}")
-async def download_zip(task_id: str):
-    task = TASKS.get(task_id)
+    return JSONResponse({
+        "status": "success",
+        "task_id": task_id,
+        "book_title": book_title,
+        "total_chapters": len(chapters),
+        "redirect_url": "/tasks"
+    })
+
+@app.get("/api/tasks")
+async def get_all_tasks():
+    """取得所有任務清單（含上次更新時間、狀態、進度%）"""
+    return JSONResponse(task_manager.list_tasks())
+
+@app.get("/api/tasks/{task_id}")
+async def get_task_details(task_id: str):
+    """查詢單一任務詳細狀態"""
+    task = task_manager.get_task(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="任務不存在")
+        raise HTTPException(status_code=404, detail="找不到指定的任務")
+    return JSONResponse(task)
 
-    zip_file = OUTPUT_DIR / f"{task_id}_{_safe_name(task['title'])}.zip"
-    if not zip_file.exists():
-        raise HTTPException(status_code=404, detail="ZIP 壓縮檔不存在")
+@app.post("/api/tasks/{task_id}/refresh")
+async def refresh_task_status(task_id: str):
+    """使用者點擊「手動立即檢查狀態」"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="找不到指定的任務")
+    
+    # 觸發單次檢查並更新上次更新時間
+    updated_task = scheduler.check_task(task_id)
+    return JSONResponse(updated_task)
 
+@app.get("/api/download/{task_id}")
+async def download_audiobook(task_id: str):
+    """一鍵下載已完成的有聲書 ZIP 檔案"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="找不到該任務")
+
+    # 尋找匹配的 zip 檔案
+    zip_candidates = list(OUTPUT_DIR.glob(f"{task_id}*.zip"))
+    if not zip_candidates:
+        # 搜尋子資料夾中的 zip
+        zip_candidates = list((OUTPUT_DIR / task_id).glob("*.zip"))
+
+    if not zip_candidates or not zip_candidates[0].exists():
+        raise HTTPException(status_code=404, detail="檔案尚未生成或正在處理中")
+
+    target_zip = zip_candidates[0]
+    safe_title = re.sub(r'[\\/*?:"<>|]', "_", task["book_title"])
     return FileResponse(
-        path=str(zip_file),
-        media_type="application/zip",
-        filename=f"{task['title']}_有聲書.zip"
+        path=str(target_zip),
+        filename=f"{safe_title}_有聲書MP3.zip",
+        media_type="application/zip"
     )
 
+# ==========================================
+# 背景協調處理邏輯 (Background Workers)
+# ==========================================
+def _process_kaggle_submission(task_id: str, epub_path: Path, book_title: str):
+    """背景處理：建立 Kaggle Dataset 與推送 GPU Kernel"""
+    try:
+        task_manager.update_task(
+            task_id,
+            status="DATASET_UPLOADING",
+            progress_percent=10,
+            progress_message="正在上傳電子書至 Kaggle 私有資料集環境..."
+        )
+        dataset_id = kaggle_bridge.create_dataset(task_id, epub_path, book_title)
+        
+        task_manager.update_task(
+            task_id,
+            status="RUNNING",
+            dataset_slug=dataset_id,
+            progress_percent=20,
+            progress_message="資料集已掛載！正在啟動 Kaggle GPU 運算核心..."
+        )
+        kernel_slug = kaggle_bridge.trigger_gpu_kernel(task_id, dataset_id, book_title)
+        
+        task_manager.update_task(
+            task_id,
+            status="RUNNING",
+            kernel_slug=kernel_slug,
+            progress_percent=25,
+            progress_message="Kaggle GPU 算力已成功調度，每 10 分鐘自動同步最新進度..."
+        )
+    except Exception as e:
+        logger.error(f"Failed in Kaggle submission for {task_id}: {e}\n{traceback.format_exc()}")
+        task_manager.update_task(
+            task_id,
+            status="FAILED",
+            progress_percent=0,
+            progress_message=f"Kaggle 排程發送失敗：{str(e)}",
+            error=str(e)
+        )
 
-if __name__ == "__main__":
-    import uvicorn
-    print("=" * 60)
-    print("🎧 EPUB 有聲書轉檔服務已在本機啟動！")
-    print("👉 請打開瀏覽器訪問: http://127.0.0.1:8080")
-    print("=" * 60)
-    uvicorn.run("app:app", host="127.0.0.1", port=8080, reload=False)
-
+async def _process_edge_tts_conversion(task_id: str, epub_path: Path, book_title: str, chapters: list, voice_id: str, rate: str, volume: str):
+    """背景處理：本機 Edge-TTS 輕量轉檔"""
+    try:
+        out_book_dir = OUTPUT_DIR / task_id / book_title
+        out_book_dir.mkdir(parents=True, exist_ok=True)
+        total = len(chapters)
+        
+        for idx, ch in enumerate(chapters, 1):
+            pct = int((idx / total) * 90)
+            task_manager.update_task(
+                task_id,
+                status="RUNNING",
+                completed_chapters=idx - 1,
+                progress_percent=pct,
+                progress_message=f"正在轉檔第 {idx}/{total} 章：{ch['title']}..."
+            )
+            
+            safe_ch_title = re.sub(r'[\\/*?:"<>|]', "_", ch["title"])[:35]
+            mp3_out = out_book_dir / f"{idx:02d}_{safe_ch_title}.mp3"
+            
+            communicate = edge_tts.Communicate(ch["text"], voice_id, rate=rate, volume=volume)
+            await communicate.save(str(mp3_out))
+            
+        zip_path = OUTPUT_DIR / f"{task_id}_{book_title}"
+        shutil.make_archive(str(zip_path), "zip", str(out_book_dir))
+        final_zip = Path(f"{zip_path}.zip")
+        size_mb = round(final_zip.stat().st_size / (1024 * 1024), 2)
+        
+        task_manager.update_task(
+            task_id,
+            status="COMPLETED",
+            completed_chapters=total,
+            progress_percent=100,
+            progress_message="轉檔已全數完成！隨時可點擊下載完整有聲書 MP3 壓縮檔。",
+            download_url=f"/api/download/{task_id}",
+            file_size_mb=size_mb
+        )
+    except Exception as e:
+        logger.error(f"Edge-TTS failed for {task_id}: {e}\n{traceback.format_exc()}")
+        task_manager.update_task(
+            task_id,
+            status="FAILED",
+            progress_message=f"轉檔發生異常：{str(e)}",
+            error=str(e)
+        )

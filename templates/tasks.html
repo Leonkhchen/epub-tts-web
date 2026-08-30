@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任務狀態與進度看板 - EPUB 有聲書轉檔服務</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+    <!-- 頂部導航 -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                    <i class="fa-solid fa-headphones text-white text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">EPUB ➔ 有聲書轉檔服務</h1>
+                    <p class="text-xs text-slate-400">Zeabur 雲端協調 ✕ Kaggle GPU 極速運算</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-3">
+                <a href="/" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm font-medium text-slate-300 transition flex items-center space-x-2">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>新建轉檔任務</span>
+                </a>
+                <button onclick="refreshAllTasks()" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white shadow-lg shadow-indigo-600/20 transition flex items-center space-x-2">
+                    <i class="fa-solid fa-rotate"></i>
+                    <span>全部重新整理</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要內容區 -->
+    <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-8">
+        <!-- 狀態看板標題與 10 分鐘自動更新提示 -->
+        <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-6 mb-8 backdrop-blur shadow-xl">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <div class="flex items-center space-x-2 mb-1">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                            <i class="fa-solid fa-clock mr-1.5"></i> 10 分鐘自動同步
+                        </span>
+                        <span class="text-xs text-slate-400">系統每隔 10 分鐘會自動向 Kaggle 伺服器查詢並更新進度</span>
+                    </div>
+                    <h2 class="text-xl font-bold text-white">轉檔任務即時看板</h2>
+                </div>
+                <div class="flex items-center space-x-4 bg-slate-900/60 px-4 py-2.5 rounded-xl border border-slate-700/50">
+                    <div class="text-right">
+                        <div class="text-xs text-slate-400">下次自動檢查倒數</div>
+                        <div id="countdown-timer" class="text-sm font-mono font-bold text-indigo-400">09:59</div>
+                    </div>
+                    <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 任務清單容器 -->
+        <div id="tasks-container" class="space-y-6">
+            {% if tasks %}
+                {% for t in tasks %}
+                <div class="task-card bg-slate-800/40 border border-slate-700/70 rounded-2xl p-6 shadow-lg hover:border-slate-600 transition" id="card-{{ t.task_id }}">
+                    <div class="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
+                        <div class="flex items-start space-x-4">
+                            <div class="w-12 h-12 rounded-xl bg-slate-700/50 flex items-center justify-center text-slate-300 text-xl flex-shrink-0 border border-slate-600/50">
+                                <i class="fa-solid fa-book"></i>
+                            </div>
+                            <div>
+                                <div class="flex items-center space-x-2">
+                                    <h3 class="text-lg font-bold text-white">{{ t.book_title }}</h3>
+                                    {% if t.engine == 'kaggle_gpu' %}
+                                        <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                                            ⚡ Kaggle GPU (MeloTTS)
+                                        </span>
+                                    {% else %}
+                                        <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                            Edge-TTS
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <div class="text-xs text-slate-400 mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                                    <span><i class="fa-solid fa-fingerprint mr-1"></i> ID: <code class="text-slate-300 font-mono">{{ t.task_id }}</code></span>
+                                    <span><i class="fa-regular fa-calendar-plus mr-1"></i> 建立時間：{{ t.created_at }}</span>
+                                    <span class="text-indigo-300 font-medium"><i class="fa-solid fa-clock-rotate-left mr-1"></i> 上次更新時間：<span class="last-updated">{{ t.last_updated_at }}</span></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 狀態標籤與手動重整按鈕 -->
+                        <div class="flex items-center space-x-3 self-end md:self-auto">
+                            <span class="status-badge px-3 py-1 rounded-full text-xs font-bold 
+                                {% if t.status == 'COMPLETED' %} bg-emerald-500/20 text-emerald-300 border border-emerald-500/30
+                                {% elif t.status == 'FAILED' %} bg-rose-500/20 text-rose-300 border border-rose-500/30
+                                {% elif t.status == 'RUNNING' %} bg-amber-500/20 text-amber-300 border border-amber-500/30
+                                {% else %} bg-slate-700 text-slate-300 {% endif %}">
+                                {% if t.status == 'COMPLETED' %}<i class="fa-solid fa-circle-check mr-1.5"></i> 已完成
+                                {% elif t.status == 'FAILED' %}<i class="fa-solid fa-triangle-exclamation mr-1.5"></i> 失敗
+                                {% elif t.status == 'RUNNING' %}<i class="fa-solid fa-spinner fa-spin mr-1.5"></i> 進行中
+                                {% else %}<i class="fa-solid fa-hourglass-start mr-1.5"></i> 排隊中{% endif %}
+                            </span>
+                            <button onclick="refreshSingleTask('{{ t.task_id }}')" class="p-2 rounded-lg bg-slate-700/60 hover:bg-slate-600 text-slate-300 hover:text-white transition" title="立即查詢最新狀態">
+                                <i class="fa-solid fa-arrows-rotate"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 進度條與狀態訊息 -->
+                    <div class="space-y-2 my-4">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-300 font-medium progress-msg">{{ t.progress_message }}</span>
+                            <span class="font-mono font-bold text-indigo-400 progress-pct">{{ t.progress_percent }}%</span>
+                        </div>
+                        <div class="w-full h-2.5 bg-slate-700/60 rounded-full overflow-hidden">
+                            <div class="progress-bar h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 rounded-full transition-all duration-500" style="width: {{ t.progress_percent }}%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- 下載按鈕 (完成時顯示) -->
+                    <div class="download-container pt-3 border-t border-slate-700/50 flex items-center justify-between {% if t.status != 'COMPLETED' %}hidden{% endif %}">
+                        <div class="text-xs text-slate-400">
+                            <i class="fa-solid fa-file-zipper mr-1 text-emerald-400"></i> 有聲書 MP3 壓縮包已產生
+                            {% if t.file_size_mb > 0 %}({{ t.file_size_mb }} MB){% endif %}
+                        </div>
+                        <a href="/api/download/{{ t.task_id }}" class="px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white text-sm font-bold shadow-lg shadow-emerald-600/20 transition flex items-center space-x-2">
+                            <i class="fa-solid fa-download"></i>
+                            <span>📥 一鍵下載 MP3 壓縮檔</span>
+                        </a>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <!-- 無任務時的提示 -->
+                <div class="text-center py-16 bg-slate-800/20 border border-slate-800 rounded-2xl">
+                    <div class="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center text-slate-500 text-2xl mx-auto mb-4">
+                        <i class="fa-regular fa-folder-open"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-300">目前尚無轉檔任務</h3>
+                    <p class="text-sm text-slate-500 mt-1 mb-6">請點擊上方按鈕上傳您的第一本 EPUB 電子書！</p>
+                    <a href="/" class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition">
+                        前往上傳書籍
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+    </main>
+
+    <!-- 底部版權 -->
+    <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
+        EPUB to Audiobook Web Service &copy; 2026 ・ Powered by FastAPI & Kaggle GPU
+    </footer>
+
+    <!-- 互動腳本 (倒數計時與查詢更新) -->
+    <script>
+        let countdownSeconds = 600; // 10 分鐘
+
+        function updateCountdown() {
+            const m = Math.floor(countdownSeconds / 60).toString().padStart(2, '0');
+            const s = (countdownSeconds % 60).toString().padStart(2, '0');
+            document.getElementById('countdown-timer').innerText = `${m}:${s}`;
+            if (countdownSeconds > 0) {
+                countdownSeconds--;
+            } else {
+                countdownSeconds = 600;
+                refreshAllTasks();
+            }
+        }
+        setInterval(updateCountdown, 1000);
+
+        async function refreshSingleTask(taskId) {
+            const card = document.getElementById(`card-${taskId}`);
+            if (!card) return;
+            
+            const btn = card.querySelector('button');
+            const icon = btn.querySelector('i');
+            icon.classList.add('fa-spin');
+            
+            try {
+                const res = await fetch(`/api/tasks/${taskId}/refresh`, { method: 'POST' });
+                const task = await res.json();
+                updateTaskCardUI(card, task);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                icon.classList.remove('fa-spin');
+            }
+        }
+
+        async function refreshAllTasks() {
+            try {
+                const res = await fetch('/api/tasks');
+                const tasks = await res.json();
+                tasks.forEach(t => {
+                    const card = document.getElementById(`card-${t.task_id}`);
+                    if (card) updateTaskCardUI(card, t);
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function updateTaskCardUI(card, task) {
+            // 更新上次更新時間
+            const updatedSpan = card.querySelector('.last-updated');
+            if (updatedSpan) updatedSpan.innerText = task.last_updated_at;
+
+            // 更新進度與文字
+            const msgSpan = card.querySelector('.progress-msg');
+            const pctSpan = card.querySelector('.progress-pct');
+            const bar = card.querySelector('.progress-bar');
+            
+            if (msgSpan) msgSpan.innerText = task.progress_message;
+            if (pctSpan) pctSpan.innerText = `${task.progress_percent}%`;
+            if (bar) bar.style.width = `${task.progress_percent}%`;
+
+            // 更新狀態徽章
+            const badge = card.querySelector('.status-badge');
+            if (badge) {
+                if (task.status === 'COMPLETED') {
+                    badge.className = 'status-badge px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                    badge.innerHTML = '<i class="fa-solid fa-circle-check mr-1.5"></i> 已完成';
+                    
+                    const dlBox = card.querySelector('.download-container');
+                    if (dlBox) dlBox.classList.remove('hidden');
+                } else if (task.status === 'FAILED') {
+                    badge.className = 'status-badge px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30';
+                    badge.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-1.5"></i> 失敗';
+                } else if (task.status === 'RUNNING') {
+                    badge.className = 'status-badge px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30';
+                    badge.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i> 進行中';
+                }
+            }
+        }
+    </script>
+</body>
+</html>
