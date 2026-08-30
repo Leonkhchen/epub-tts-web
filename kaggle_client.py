@@ -188,7 +188,7 @@ torch.set_num_threads(4)
 from melo.api import TTS
 print("🎉 MeloTTS 與環境就緒！")"""
 
-        cell2 = f"""# 核心解析與 C++ 聲學變調加速
+        cell2 = """# 核心解析與 C++ 聲學變調加速
 import os, re, gc, time, zipfile, shutil, traceback
 import numpy as np
 import xml.etree.ElementTree as ET
@@ -204,7 +204,7 @@ TMP_DIR = Path("/tmp/epub_work")
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 def extract_chapters(epub_path: Path) -> tuple[str, list[dict]]:
-    book_title = "{book_title}"
+    book_title = "__BOOK_TITLE__"
     with zipfile.ZipFile(epub_path, "r") as z:
         rootfile = "content.opf"
         try:
@@ -217,7 +217,7 @@ def extract_chapters(epub_path: Path) -> tuple[str, list[dict]]:
         except Exception:
             pass
         
-        opf_dir = str(Path(rootfile).parent).replace("\\\\", "/")
+        opf_dir = str(Path(rootfile).parent).replace("\\", "/")
         if opf_dir == ".": opf_dir = ""
         opf_xml = z.read(rootfile)
         opf_root = ET.fromstring(opf_xml)
@@ -227,7 +227,7 @@ def extract_chapters(epub_path: Path) -> tuple[str, list[dict]]:
                 book_title = elem.text.strip()
                 break
                 
-        manifest = {{}}
+        manifest = {}
         for elem in opf_root.iter():
             if elem.tag.endswith("item"):
                 i_id = elem.attrib.get("id")
@@ -250,33 +250,33 @@ def extract_chapters(epub_path: Path) -> tuple[str, list[dict]]:
             try:
                 raw = z.read(item).decode("utf-8", errors="replace")
                 soup = BeautifulSoup(raw, "html.parser")
-                text = soup.get_text("\\n\\n", strip=True)
-                text = re.sub(r"[ \\t]+", " ", text)
-                text = re.sub(r"\\n{{3,}}", "\\n\\n", text).strip()
+                text = soup.get_text("\n\n", strip=True)
+                text = re.sub(r"[ \t]+", " ", text)
+                text = re.sub(r"\n{3,}", "\n\n", text).strip()
                 if len(text) < 50:
                     continue
                 n += 1
                 h = soup.find(["h1", "h2", "h3"])
-                title = h.get_text(" ", strip=True) if h else f"第 {{n}} 章"
-                chapters.append({{"index": n, "title": title, "text": text}})
+                title = h.get_text(" ", strip=True) if h else f"第 {n} 章"
+                chapters.append({"index": n, "title": title, "text": text})
             except Exception:
                 pass
         return book_title, chapters
 
 def chunk_text(text: str, max_chars: int = 250) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\\n{{2,}}", text) if p.strip()]
+    paras = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
     chunks, cur, cur_len = [], [], 0
     for p in paras:
         if cur_len + len(p) > max_chars and cur:
-            chunks.append("\\n\\n".join(cur))
+            chunks.append("\n\n".join(cur))
             cur, cur_len = [], 0
         cur.append(p)
         cur_len += len(p)
     if cur:
-        chunks.append("\\n\\n".join(cur))
-    return [c for c in chunks if re.search(r"[\\w\\u4e00-\\u9fa5]", c)]
+        chunks.append("\n\n".join(cur))
+    return [c for c in chunks if re.search(r"[\w\u4e00-\u9fa5]", c)]
 
-def apply_deep_male_filter(wav_path: Path, out_path: Path, n_steps: float = {pitch_shift}) -> None:
+def apply_deep_male_filter(wav_path: Path, out_path: Path, n_steps: float = __PITCH_SHIFT__) -> None:
     try:
         y, sr = sf.read(str(wav_path))
         if y.ndim > 1: y = y[:, 0]
@@ -285,14 +285,14 @@ def apply_deep_male_filter(wav_path: Path, out_path: Path, n_steps: float = {pit
         sf.write(str(out_path), shifted.squeeze(0).numpy(), sr, subtype='PCM_16')
     except Exception:
         shutil.copy2(wav_path, out_path)
-"""
+""".replace("__BOOK_TITLE__", book_title).replace("__PITCH_SHIFT__", str(pitch_shift))
 
-        cell3 = f"""# 執行批次轉檔與輸出封裝
+        cell3 = """# 執行批次轉檔與輸出封裝
 device = "cpu"
 if torch.cuda.is_available():
     major, _ = torch.cuda.get_device_capability()
     device = "cuda" if major >= 7 else "cpu"
-print(f"🚀 Active device: {{device}}")
+print(f"🚀 Active device: {device}")
 
 input_candidates = list(Path("/kaggle/input").rglob("*.epub"))
 target_epub = input_candidates[0] if input_candidates else None
@@ -301,24 +301,24 @@ if not target_epub:
     print("❌ No EPUB found in dataset")
 else:
     book_title, chapters = extract_chapters(target_epub)
-    print(f"📚 書名：《{{book_title}}》，共 {{len(chapters)}} 章")
+    print(f"📚 書名：《{book_title}》，共 {len(chapters)} 章")
     
     tts_model = TTS(language="ZH", device=device)
     speaker_id = next(iter(tts_model.hps.data.spk2id.values()))
     
-    safe_title = re.sub(r'[\\\\/*?:\"<>|]', "_", book_title)[:40].strip() or "Audiobook"
+    safe_title = re.sub(r'[\\/*?:"<>|]', "_", book_title)[:40].strip() or "Audiobook"
     out_book_dir = WORKING_DIR / "audiobooks" / safe_title
     out_book_dir.mkdir(parents=True, exist_ok=True)
     
     silence = AudioSegment.silent(duration=350)
     for ch in chapters:
         idx, title, text = ch["index"], ch["title"], ch["text"]
-        safe_ch = re.sub(r'[\\\\/*?:\"<>|]', "_", title)[:40]
-        out_mp3 = out_book_dir / f"{{idx:02d}}_{{safe_ch}}.mp3"
+        safe_ch = re.sub(r'[\\/*?:"<>|]', "_", title)[:40]
+        out_mp3 = out_book_dir / f"{idx:02d}_{safe_ch}.mp3"
         if out_mp3.exists() and out_mp3.stat().st_size > 10240:
             continue
             
-        print(f"[{idx:02d}/{{len(chapters):02d}}] 正在處理：{{title}} ({{len(text)}} 字)...")
+        print(f"[{idx:02d}/{len(chapters):02d}] 正在處理：{title} ({len(text)} 字)...")
         chunks = chunk_text(text, max_chars=250)
         segments = []
         try:
@@ -327,25 +327,25 @@ else:
                 pitch_wav = TMP_DIR / "pitch.wav"
                 tts_model.tts_to_file(chunk, speaker_id, str(raw_wav), speed=0.95, quiet=True)
                 if raw_wav.exists() and raw_wav.stat().st_size > 0:
-                    apply_deep_male_filter(raw_wav, pitch_wav, n_steps={pitch_shift})
+                    apply_deep_male_filter(raw_wav, pitch_wav, n_steps=__PITCH_SHIFT__)
                     target = pitch_wav if pitch_wav.exists() else raw_wav
                     segments.append(AudioSegment.from_file(str(target)))
             if segments:
                 combined = segments[0]
                 for seg in segments[1:]: combined += silence + seg
                 combined.export(str(out_mp3), format="mp3", bitrate="128k")
-                print(f"   ✅ 完成：{{out_mp3.name}}")
+                print(f"   ✅ 完成：{out_mp3.name}")
         except Exception as e:
-            print(f"   ❌ 錯誤：{{e}}")
+            print(f"   ❌ 錯誤：{e}")
             
         if idx % 4 == 0:
             gc.collect()
             if torch.cuda.is_available(): torch.cuda.empty_cache()
             
-    zip_path = WORKING_DIR / f"{{safe_title}}_有聲書MP3"
+    zip_path = WORKING_DIR / f"{safe_title}_有聲書MP3"
     shutil.make_archive(str(zip_path), "zip", str(out_book_dir))
-    print(f"📦 轉檔完成！ZIP 已產出：{{zip_path}}.zip")
-"""
+    print(f"📦 轉檔完成！ZIP 已產出：{zip_path}.zip")
+""".replace("__PITCH_SHIFT__", str(pitch_shift))
 
         def to_lines(t): return t.splitlines(keepends=True)
         return {
